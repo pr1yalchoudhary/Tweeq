@@ -108,7 +108,7 @@ resets spending or operation counters. Keep all worker environments consistent.
 
 The server-issued opaque visitor credential is bound to a server-derived network HMAC. Raw IPs are not
 stored. IPv4-mapped IPv6 is normalized; IPv6 is grouped by /64. Local peer mode ignores forwarded headers.
-On Render, peer mode is rejected; Render mode requires `RENDER=true`, a verified `True-Client-IP` ingress
+On Render, peer mode is rejected; Render mode requires `RENDER=true`, a verified `CF-Connecting-IP` ingress
 and the explicit verification flag. **Never set that flag just to silence a configuration error.**
 Run Uvicorn with `--no-proxy-headers` and verify Render overwrites/validates the trusted IP header on all
 routes, including direct onrender.com calls. Spoofed `True-Client-IP`, `CF-Connecting-IP`, and

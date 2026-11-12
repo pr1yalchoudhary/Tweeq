@@ -197,6 +197,39 @@ that change before interpreting the report.
 
 ## Separate production prerequisites
 
+The restored server command is now:
+`uvicorn app.main:app --host 0.0.0.0 --port $PORT --no-proxy-headers`.
+Keep that final flag when restoring startup after any later maintenance.
+
+For the remaining live ingress check, the backend now selects exactly one valid
+`CF-Connecting-IP`, following Render's documented Cloudflare overwrite behavior.
+It rejects missing/duplicate/comma-joined values and ignores `True-Client-IP` and
+`X-Forwarded-For` for public network identity. The verification flag remains false
+until real ingress testing is complete.
+
+A **temporary** ASGI wrapper (`ip_verification_app:app`) can be selected in the
+Start Command for the existing `/api/health` URL. It forwards every ordinary
+request to the unchanged app. Only GET health requests with the existing valid
+demo bearer credential receive an additional `X-Tweeq-IP-Check` response header.
+No new URL, unauthenticated diagnostic response, API key, Redis operation or paid
+provider request is introduced. Diagnostics contain validity/disabled-state flags
+and a per-instance ephemeral network fingerprint, never raw IPs or credentials.
+The diagnostic credential must be sent privately in the Authorization header,
+never pasted into chat, URLs, source or startup commands.
+
+After activating that wrapper with `--no-proxy-headers`, send an authenticated
+baseline health request and requests attempting to forge `CF-Connecting-IP`,
+`True-Client-IP`, and `X-Forwarded-For` with RFC 5737 test addresses. Require a
+single valid edge header, no selected test address and a stable fingerprint from
+the same client/instance. Also verify unauthenticated callers receive no
+diagnostic header. These calls neither create visitor sessions nor touch quotas.
+
+Immediately after recording the results, restore `app.main:app` with
+`--no-proxy-headers`, then delete the temporary wrapper and its dedicated tests
+from the deployed source. Confirm diagnostics are absent after cleanup. No
+temporary verification route or credential should remain. The normalizer and
+strict header checks are permanent public-credit protection.
+
 An isolated pass proves the adapter/Lua behavior against the real datastore, but it
 does not prove the live HTTP ingress identifies visitor networks correctly. Before
 launch, verify Render's trusted IP header cannot be forged, the actual start command

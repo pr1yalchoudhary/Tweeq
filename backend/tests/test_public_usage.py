@@ -332,7 +332,31 @@ def test_ip_headers_are_not_trusted_locally_and_ipv6_is_grouped(store, monkeypat
     monkeypatch.setenv('RENDER', 'true')
     monkeypatch.setenv('PUBLIC_RENDER_IP_VERIFIED', 'true')
     with pytest.raises(HTTPException): usage.ip_key(req('192.0.2.10'))
-    assert usage.ip_key(req('192.0.2.10', [(b'true-client-ip', b'198.51.100.1')])) != usage.ip_key(req('192.0.2.10', [(b'true-client-ip', b'198.51.100.2')]))
+    assert usage.ip_key(req('192.0.2.10', [(b'cf-connecting-ip', b'198.51.100.1')])) != usage.ip_key(req('192.0.2.10', [(b'cf-connecting-ip', b'198.51.100.2')]))
+
+
+@pytest.mark.parametrize('headers', [[], [(b'true-client-ip', b'198.51.100.1')],
+    [(b'cf-connecting-ip', b'198.51.100.1, 203.0.113.31')],
+    [(b'cf-connecting-ip', b'198.51.100.1'), (b'cf-connecting-ip', b'203.0.113.31')],
+    [(b'cf-connecting-ip', b'not-an-ip')]])
+def test_render_rejects_missing_ambiguous_or_legacy_ip_headers(store, monkeypatch, headers):
+    monkeypatch.setenv('PUBLIC_IP_SOURCE', 'render')
+    monkeypatch.setenv('RENDER', 'true')
+    monkeypatch.setenv('PUBLIC_RENDER_IP_VERIFIED', 'true')
+    request = Request({'type': 'http', 'client': ('192.0.2.1', 123), 'headers': headers})
+    with pytest.raises(HTTPException): usage.ip_key(request)
+
+
+def test_render_ignores_other_spoofable_headers_and_keeps_verification_gate(store, monkeypatch):
+    monkeypatch.setenv('PUBLIC_IP_SOURCE', 'render')
+    monkeypatch.setenv('RENDER', 'true')
+    monkeypatch.setenv('PUBLIC_RENDER_IP_VERIFIED', 'true')
+    base = [(b'cf-connecting-ip', b'198.51.100.1')]
+    def key(headers):
+        return usage.ip_key(Request({'type': 'http', 'client': ('192.0.2.1', 123), 'headers': headers}))
+    assert key(base) == key(base + [(b'true-client-ip', b'203.0.113.31'), (b'x-forwarded-for', b'203.0.113.32')])
+    monkeypatch.setenv('PUBLIC_RENDER_IP_VERIFIED', 'false')
+    with pytest.raises(HTTPException): key(base)
 
 
 def test_provider_failure_does_not_retry_automatically(store, monkeypatch):

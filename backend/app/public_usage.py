@@ -194,6 +194,15 @@ async def command(*args):
         raise HTTPException(503, 'Public usage storage is unavailable. No AI request was sent.') from None
 
 
+def normalized_network(raw):
+    if '%' in raw:
+        raise ValueError()
+    address = ipaddress.ip_address(raw)
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return str(address) if address.version == 4 else str(ipaddress.ip_network(f'{address}/64', strict=False))
+
+
 def ip_key(request: Request):
     secret = os.getenv('PUBLIC_IP_HASH_SECRET', '')
     if len(secret) < 32:
@@ -208,16 +217,14 @@ def ip_key(request: Request):
     elif source == 'render':
         if os.getenv('RENDER') != 'true' or os.getenv('PUBLIC_RENDER_IP_VERIFIED') != 'true':
             raise HTTPException(503, 'Public AI generation is temporarily unavailable.')
-        raw = request.headers.get('true-client-ip', '')
+        values = request.headers.getlist('cf-connecting-ip')
+        if len(values) != 1:
+            raise HTTPException(503, 'Cannot verify the visitor network. No AI request was sent.')
+        raw = values[0]
     else:
         raise HTTPException(503, 'Public AI generation is temporarily unavailable.')
     try:
-        if '%' in raw:
-            raise ValueError()
-        address = ipaddress.ip_address(raw)
-        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
-            address = address.ipv4_mapped
-        normalized = str(address) if address.version == 4 else str(ipaddress.ip_network(f'{address}/64', strict=False))
+        normalized = normalized_network(raw)
     except ValueError:
         raise HTTPException(503, 'Cannot verify the visitor network. No AI request was sent.') from None
     return hmac.new(secret.encode(), normalized.encode(), hashlib.sha256).hexdigest()
