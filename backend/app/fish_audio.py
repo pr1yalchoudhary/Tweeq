@@ -5,7 +5,7 @@ from pathlib import Path
 
 import httpx
 import msgpack
-from .public_usage import reserve_operation
+from .public_usage import operation, mode as access_mode, positive_int
 
 
 class FishError(Exception):
@@ -33,8 +33,7 @@ async def create_voice(reference: Path, title: str):
     if not configured():
         raise FishError('Backend configuration: set FISH_AUDIO_API_KEY in backend/.env and restart the backend.', 503)
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=10)) as client:
-            await reserve_operation()
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=10)) as client, operation('voice_create'):
             response = await client.post('https://api.fish.audio/model',
                 headers={'Authorization': 'Bearer ' + os.environ['FISH_AUDIO_API_KEY'].strip()},
                 data={'type': 'tts', 'title': title, 'train_mode': 'fast', 'visibility': 'private', 'generate_sample': 'false'},
@@ -65,8 +64,7 @@ def voice_result(response, expected=200):
 async def voice_state(model_id: str):
     from urllib.parse import quote
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=10)) as client:
-            await reserve_operation()
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=10)) as client, operation('voice_status'):
             response = await client.get('https://api.fish.audio/model/' + quote(model_id, safe=''),
                 headers={'Authorization': 'Bearer ' + os.environ['FISH_AUDIO_API_KEY'].strip()})
             return voice_result(response)
@@ -107,12 +105,11 @@ async def generate(text: str, reference: Path, transcript: str | None = None, *,
         messages.update({400: failure, 403: unavailable, 404: unavailable, 422: failure,
                          502: unavailable, 503: unavailable, 504: unavailable})
     async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=10)) as client:
-        for attempt in range(2):
+        for attempt in range(1 if access_mode() == 'public' else 2):
             try:
-                await reserve_operation()
-                async with client.stream('POST', 'https://api.fish.audio/v1/tts', content=payload, headers=headers) as response:
+                async with operation('tts', text=text + (transcript or ''), model=model), client.stream('POST', 'https://api.fish.audio/v1/tts', content=payload, headers=headers) as response:
                     status = response.status_code
-                    if status in (429, 502, 503, 504) and attempt == 0:
+                    if status in (429, 502, 503, 504) and attempt == 0 and access_mode() != 'public':
                         await asyncio.sleep(1)
                         continue
                     if status != 200:
@@ -129,7 +126,7 @@ async def generate(text: str, reference: Path, transcript: str | None = None, *,
                         raise FishError(failure if delivery else 'Fish Audio returned empty or invalid WAV audio. Please try again.', code='fish_invalid_audio')
                     return data
             except httpx.ConnectError as exc:
-                if attempt == 0:
+                if attempt == 0 and access_mode() != 'public':
                     await asyncio.sleep(1)
                     continue
                 raise FishError('Cannot connect to Fish Audio. Check the backend network connection.', code='fish_connection_failed') from exc
@@ -147,8 +144,7 @@ async def transcribe(data: bytes):
     if not configured():
         raise FishError('Configure FISH_AUDIO_API_KEY and restart the backend.', 503)
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=10)) as client:
-            await reserve_operation()
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=10)) as client, operation('asr', seconds=positive_int('PUBLIC_MAX_RECORDING_SECONDS', 60, 900)):
             response = await client.post('https://api.fish.audio/v1/asr',
                 headers={'Authorization': 'Bearer ' + os.environ['FISH_AUDIO_API_KEY'].strip(), 'model': 'transcribe-1-pro'},
                 files={'audio': ('selection.wav', data, 'audio/wav')},

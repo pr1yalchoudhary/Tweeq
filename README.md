@@ -39,8 +39,8 @@ Set `FISH_AUDIO_API_KEY` in `backend/.env`. Keep the existing `FISH_AUDIO_MODEL`
 
 Public free usage is implemented behind an explicit rollout mode. The safe default
 still uses demo access. See [PUBLIC_USAGE.md](PUBLIC_USAGE.md) for the 2-per-visitor /
-10-global operation budget, Upstash setup, anonymous sessions, emergency switch,
-tests and deployment order. The demo instructions below apply to `AI_ACCESS_MODE=demo`.
+$2 estimated public budget and 10-global operation cap, persistent Upstash reservations, anonymous sessions, emergency switch,
+tests and deployment order. Public uploads are limited to 60 seconds and generated speech to 200 characters. Two provider operations may be consumed by a single voice setup + preview. The production launch remains gated until durable storage and ingress are verified. The demo instructions below apply to `AI_ACCESS_MODE=demo`.
 
 The frontend supports a separate backend origin for both API calls and media playback.
 In Vercel, set `VITE_API_BASE_URL=https://tweeq-backend.onrender.com` for the production

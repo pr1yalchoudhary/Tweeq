@@ -38,12 +38,13 @@ def probe(path):
     return float(data['format'].get('duration', stream.get('duration', 0))), stream
 
 
-def convert(source, target, uploaded=False):
+def convert(source, target, uploaded=False, max_duration=None):
     duration, stream = probe(source)
     if uploaded and stream.get('codec_name') not in ('mp3', 'pcm_s16le', 'pcm_s24le', 'pcm_s32le', 'pcm_f32le', 'pcm_u8', 'pcm_f64le'):
         raise ValueError('Please upload an MP3 or PCM WAV recording.')
-    if not 0 < duration <= MAX_SECONDS:
-        raise ValueError('Recordings must be between 0 and 15 minutes long.')
+    duration_limit = MAX_SECONDS if max_duration is None else max_duration
+    if not 0 < duration <= duration_limit:
+        raise ValueError(f'Recordings must be between 0 and {duration_limit:g} seconds long.')
     exe = binary('ffmpeg')
     if not exe:
         raise ValueError('FFmpeg is missing. Install it and restart the backend.')

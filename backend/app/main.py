@@ -26,8 +26,9 @@ from .sessions import Preview, Session, previews, sessions
 
 app = FastAPI(title='Tweeq', version='0.1.0')
 app.add_middleware(CORSMiddleware,
-                   allow_origins=['http://localhost:5173', 'http://127.0.0.1:5173',
-                                  'https://tweeq-ruby.vercel.app'],
+                   allow_origins=[v.strip().rstrip('/') for v in os.getenv('CORS_ORIGINS',
+                       'http://localhost:5173,http://127.0.0.1:5173,https://tweeq-ruby.vercel.app').split(',')
+                       if v.strip() and v.strip() != '*'],
                    allow_methods=['GET', 'POST', 'DELETE'], allow_headers=['Content-Type', 'Authorization', 'X-Visitor-Session'])
 DATA = ROOT / 'audio'
 MAX_UPLOAD = 25 * 1024 * 1024
@@ -90,7 +91,7 @@ async def audio_error(request, exc):
 async def fish_error(request, exc):
     # Log fixed diagnostic categories only, never request bodies, provider bodies or credentials.
     logging.getLogger('uvicorn.error').warning('Speech generation failed: code=%s upstream_status=%s', exc.code, exc.upstream_status)
-    return JSONResponse(status_code=exc.status, content={'detail': str(exc), 'error_code': exc.code,
+    return JSONResponse(status_code=exc.status, content={'detail': ('AI generation is temporarily unavailable. Please try again later.' if public_usage.mode() == 'public' else str(exc)), 'error_code': exc.code,
                                                        'upstream_status': exc.upstream_status})
 
 
@@ -153,12 +154,22 @@ async def upload(file: UploadFile = File(...), consent: bool = Form(False)):
         with source.open('wb') as out:
             while chunk := await file.read(1024 * 1024):
                 size += len(chunk)
-                if size > MAX_UPLOAD:
-                    raise HTTPException(413, 'Recording exceeds the 25 MB upload limit.')
+                if size > (public_usage.positive_int('PUBLIC_MAX_UPLOAD_BYTES', MAX_UPLOAD, MAX_UPLOAD) if public_usage.mode() == 'public' else MAX_UPLOAD):
+                    raise HTTPException(413, 'Recording exceeds the upload size limit.')
                 out.write(chunk)
         if size == 0:
             raise HTTPException(400, 'The uploaded recording is empty.')
-        recording = await run_in_threadpool(audio.convert, source, folder / 'original.wav', True)
+        if public_usage.mode() == 'public':
+            with source.open('rb') as uploaded:
+                magic = uploaded.read(12)
+            is_wav = len(magic) == 12 and magic[:4] in (b'RIFF', b'RF64') and magic[8:12] == b'WAVE'
+            is_mp3 = magic.startswith(b'ID3') or (len(magic) >= 2 and magic[0] == 255 and magic[1] & 224 == 224)
+            if not ((suffix == '.wav' and is_wav) or (suffix == '.mp3' and is_mp3)):
+                raise HTTPException(400, 'Please upload a valid MP3 or PCM WAV recording.')
+        limit = public_usage.positive_int('PUBLIC_MAX_RECORDING_SECONDS', 60, 900) if public_usage.mode() == 'public' else None
+        recording = await run_in_threadpool(audio.convert, source, folder / 'original.wav', True, limit)
+        if limit and recording.duration_seconds > limit:
+            raise HTTPException(400, f'Public demo recordings must be {limit} seconds or shorter.')
         report = await run_in_threadpool(quality.analyze, recording)
         ref, error = await run_in_threadpool(audio.reference, recording, folder / 'reference.wav', report)
         if ref and ref['end'] - ref['start'] < 10:
@@ -205,6 +216,10 @@ class TranscribeRequest(RegionRequest):
 async def transcribe(body: TranscribeRequest):
     import io
     session = get_session(body.session_id)
+    if public_usage.mode() == 'public' and session.lock.locked():
+        raise HTTPException(409, 'An edit is already being processed for this recording.')
+    if public_usage.mode() == 'public' and body.end - body.start > public_usage.positive_int('PUBLIC_MAX_RECORDING_SECONDS', 60, 900):
+        raise HTTPException(422, 'The selection exceeds the public demo duration limit.')
     async with session.lock:
         if body.revision != session.revision:
             raise HTTPException(409, 'Recording changed. Select a segment in the current recording.')
@@ -270,6 +285,11 @@ async def ensure_voice(session, sid):
 async def preview(body: PreviewRequest):
     sid = str(body.session_id)
     session = get_session(sid)
+    if public_usage.mode() == 'public' and session.lock.locked():
+        raise HTTPException(409, 'An edit is already being processed for this recording.')
+    public_usage.text_limit(body.replacement_text)
+    if body.mode == 'delivery':
+        public_usage.text_limit(body.translated_text or body.segment_text)
     async with session.lock:
         selection(session, body.start, body.end)
         if body.revision is not None and body.revision != session.revision:

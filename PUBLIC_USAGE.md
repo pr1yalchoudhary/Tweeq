@@ -1,175 +1,246 @@
-# Public AI allowance rollout
+# Public AI allowance rollout — 2026-11-12
 
-Implemented locally only. No deployment, Redis provisioning, credentials, counter
-initialization or paid Fish Audio requests were performed. The default remains
-`AI_ACCESS_MODE=demo`, preserving the existing demo guard until explicit rollout.
-Public mode ignores demo bearer codes; there is no owner-token bypass of its budget.
+## Current rollout status
 
-## What is counted
+The protection changes are implemented and tested locally. **Public production access is not enabled.**
+The live backend's read-only `/api/public/usage` response still says `mode: demo`.
+The latest frontend and backend health checks both return HTTP 200. The owner reports
+correcting Upstash credentials in Render and redeploying. That private authentication
+is not observable through the demo-mode public status route. The earlier HTTP 401
+was a local credential diagnostic, not a test of the newly updated Render settings.
+See [PUBLIC_VERIFICATION.md](PUBLIC_VERIFICATION.md) for safe Render-shell verification.
+No counters were initialized, migrated, reset or enabled; no deployments or paid Fish requests occurred.
+No Render/Vercel deployment credentials are configured locally. Verify the datastore and Render
+IP ingress before switching modes. The existing access code remains in demo mode as required during rollout.
 
-The limits are **2 provider-operation reservations per anonymous visitor** and
-**10 across the entire public launch**, with no daily/monthly reset. Each provider
-HTTP attempt reserves one slot immediately before dispatch. This includes:
+## Architecture
 
-- Correct Speech/Edit Text, Change Delivery, previews, and regenerations (TTS).
-- Private voice/model setup, which may itself be billable.
-- Speech detection/ASR, including explicit retry after a failure.
-- Every automatic TTS transport retry. A retry cannot use a previous reservation.
-- Voice-status polling, conservatively counted even if the provider does not bill it.
+The existing frontend already supports anonymous public mode: `POST /api/public/session` issues an opaque
+random credential, kept in sessionStorage (memory fallback), which is sent as `X-Visitor-Session`.
+The password input is absent when the backend reports public mode. There is no public owner-token bypass.
+Public limits apply at the Fish adapter, immediately before **every** outbound provider attempt, so direct
+HTTP clients cannot bypass them through an alternative application endpoint.
 
-Consequently two uses do **not** guarantee two finished previews: the first preview
-usually needs voice setup + TTS (two uses). Change Delivery may additionally require
-ASR; users can manually enter words as before. Pending voice setup or retries can
-exhaust the allowance before a playable clip exists. These strict semantics protect
-the requested maximum of ten billable operations. A different product allowance
-would require explicitly changing the budget, not relabelling these counters.
+Use a dedicated, durable Upstash Redis database, not Render's ephemeral filesystem. The existing `httpx`
+dependency calls its HTTPS REST API; no new runtime package or large database is required. One atomic Lua
+script validates enabled state, schema, ledger totals, pending calls, visitor/network quotas, rate,
+operation count, and remaining estimated dollars before committing a reservation. Redis serialization
+protects multiple backend workers and simultaneous requests. All keys share `tweeq:{public-v1}:`.
+Missing/corrupt state, malformed responses or unavailable storage prevent paid dispatch. No automatic
+initialization, reset, reservation retry or refund occurs at startup/redeploy.
 
-Cached transcripts, uploads, local quality/cleanup processing, applying a saved
-preview, multiple edits, Undo/Redo, playback and exports do not consume Fish calls.
-The editing workflow and model parameters are unchanged. Provider requests have
-no automatic quota/storage retries. Reservations are never refunded on failed or
-ambiguous provider responses, timeouts, client disconnects or backend crashes.
-An uncertain Redis response can burn a slot without dispatching a provider request.
+Schema 2 stores:
+- Global operation count, reserved microdollars, budget, enabled flag and active count.
+- A nonexpiring debit ledger and pending set; their sums/counts must match global state.
+- Nonexpiring per-visitor and HMAC-network operation counts.
+- Each reservation's kind, conservative amount, visitor/network digests and terminal/pending state.
+- Short-lived per-network rate counters; only these expire.
 
-## Datastore and setup
+Reservation amounts and quotas never expire automatically. Success, provider errors, timeouts, cancellation,
+client disconnect and backend crashes keep the full debit. Completion frees a concurrency slot but never
+returns credit. A crash or ambiguous storage response can leave a paid slot pending indefinitely: this is
+intentional. Operators must stop workers and resolve it manually without refunding its cost or operation.
 
-Use a dedicated Upstash Redis database independent of Render's filesystem. The
-production adapter uses the existing `httpx` dependency with the HTTPS REST API.
-The same Lua script checks enabled state, schema, visitor, IP and global quotas,
-then increments counters atomically. All keys use the same Redis hash tag.
+## Estimated $2 budget and pricing audit
 
-Create a database in the Upstash console, enable durable storage, and **disable
-eviction**. Do not use an expiring/test datastore. Confirm the chosen plan's
-retention, backup and inactivity policies before launch. Copy its REST URL and
-standard read/write REST token (not the read-only token) into Render's backend
-environment. Do not put them in Vercel or commit them.
+Official Fish documentation checked **2026-11-12** lists:
+- Drama 3: $50 / million UTF-8 input bytes (temporary $10 promotion through November 30 is ignored).
+- S2.1 Pro and S2 Pro: $15 / million UTF-8 bytes; S2.1 Pro Free currently $0.
+- File ASR (`transcribe-1-pro`): $0.36 / audio hour, rounded up to a second.
 
-Configure these backend variables:
+The implementation deliberately reserves **the greater of $0.20 and 2x the documented calculation**
+for every provider operation. All supported TTS models use the highest $50/M rate, including currently
+free correction models. UTF-8 bytes include the final direction/tag script and any inline reference
+transcript. ASR reserves against the configured maximum selected-segment duration (60 seconds by default),
+which overestimates shorter selections. All arithmetic uses integer microdollars (1 USD = 1,000,000).
 
-| Variable | Value |
+There is **no separately documented saved-voice creation/status price** in the pricing page. The default
+$0.20 voice allowance is an operator policy reserve, **not a claimed provider price or proven cost bound**.
+Voice status polls are conservatively counted as operations too. Confirm the account's actual voice
+creation charges with Fish before setting `PUBLIC_COST_REVIEWED=true`; otherwise paid dispatch stays blocked.
+That review flag is required both by the enable CLI and the worker's dispatch guard.
+
+No reliable per-response dollar billing field or account spending-cap API was established in the official
+references. Therefore successful responses do not trigger guessed billing reconciliation or refunds.
+The ledger tracks **estimated reserved spending**, not an invoice. Ten operations at the default minimum
+reserve exhaust $2; longer scripts can exhaust it sooner. Unknown voice pricing and later price changes
+mean this is **not a guaranteed provider-enforced $2 invoice cap**. Recheck pricing before enabling or
+changing limits. Ask Fish whether your account supports a hard API spend cap; configure one if available.
+Use a dedicated prepaid API balance and avoid automatic recharges if your account permits that setup.
+No account setting was assumed or changed here. Public accounting does not count authorized demo-mode
+internal tests; both can still draw from the same Fish account balance.
+
+## Defaults and backend environment
+
+Keep secrets only in Render/backend environment, never in Vercel or `VITE_` variables.
+The actual `FISH_AUDIO_API_KEY` and model settings remain unchanged.
+
+| Variable | Default / purpose |
 |---|---|
-| `AI_ACCESS_MODE` | Keep `demo` during setup; use `public` only at final rollout |
-| `PUBLIC_GENERATIONS_ENABLED` | Keep `false` during setup; `true` to permit public reservations |
-| `UPSTASH_REDIS_REST_URL` | The database's HTTPS REST URL |
-| `UPSTASH_REDIS_REST_TOKEN` | Its standard read/write REST token |
-| `PUBLIC_IP_HASH_SECRET` | Independent random secret, at least 32 characters; preserve across deploys |
-| `PUBLIC_IP_SOURCE` | `render` on Render; `peer` on localhost |
-| `PUBLIC_RENDER_IP_VERIFIED` | `true` only after the ingress verification below |
-| `DEMO_ACCESS_TOKEN` | Retain for rollback to demo mode |
-| `FISH_AUDIO_API_KEY`, `FISH_AUDIO_MODEL` | Existing backend-only configuration |
+| `AI_ACCESS_MODE` | `demo` during setup; `public` only after verified rollout |
+| `PUBLIC_AI_ENABLED` | `false` during setup; preferred emergency switch |
+| `PUBLIC_GENERATIONS_ENABLED` | Legacy switch; if explicitly false it also blocks public AI |
+| `PUBLIC_COST_REVIEWED` | `false`; deliberate provider/voice pricing review required |
+| `PUBLIC_BUDGET_USD` | `2` lifetime estimated public allowance |
+| `PUBLIC_GLOBAL_OPERATIONS` | `10` lifetime provider reservations |
+| `PUBLIC_VISITOR_OPERATIONS` | `2` lifetime provider reservations per visitor |
+| `PUBLIC_IP_OPERATIONS` | `2` lifetime provider reservations per network |
+| `PUBLIC_AI_CONCURRENCY` | `1` concurrent provider operation across all workers |
+| `PUBLIC_OPERATION_RESERVE_USD` | `0.20` minimum reserve per operation |
+| `PUBLIC_VOICE_RESERVE_USD` | `0.20` unverified voice-create/status policy allowance |
+| `PUBLIC_MAX_RECORDING_SECONDS` | `60` uploads/ASR selections |
+| `PUBLIC_MAX_UPLOAD_BYTES` | `26214400` (25 MiB); may be lowered |
+| `PUBLIC_MAX_TEXT_CHARS` | `200` generated speech characters per request |
+| `UPSTASH_REDIS_REST_URL` | Dedicated durable database's HTTPS REST URL |
+| `UPSTASH_REDIS_REST_TOKEN` | Standard read/write token, not read-only |
+| `PUBLIC_IP_HASH_SECRET` | Independent random secret, at least 32 characters; keep stable |
+| `PUBLIC_IP_SOURCE` | `peer` locally; verified `render` in production |
+| `PUBLIC_RENDER_IP_VERIFIED` | `false` until actual ingress spoofing checks pass |
+| `CORS_ORIGINS` | Exact production frontend/local development origins; no wildcard |
+| `DEMO_ACCESS_TOKEN` | Retain only for controlled demo-mode migration/rollback |
 
-Generate the IP secret locally with `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
-Do not rotate this secret routinely: changing it changes IP bucket identities.
-Do not change the fixed `tweeq:{public-v1}:` key prefix or initialize a new database
-on redeploy. Visitor, IP and global quota records have **no expiry**. Only the
-short-window abuse keys expire. Loss/deletion/rollback of the database can undermine
-the historical budget; missing global state disables public use rather than
-silently recreating it. Never restore an old counter snapshot while generations
-are enabled. Disable first and reconcile reservations conservatively.
+Persisted limits constrain environment settings: workers use the smaller of each stored/environment
+budget, quota and concurrency limit. A redeploy cannot silently raise the stored allowance.
+Use the private `configure` command while disabled to deliberately change persisted limits; no command
+resets spending or operation counters. Keep all worker environments consistent.
 
-## IP trust boundary
+## Anonymous abuse limits and input validation
 
-Run Uvicorn with `--no-proxy-headers` so arbitrary forwarding headers cannot rewrite
-`request.client` implicitly. Local `peer` mode ignores forwarding headers. On Render,
-`peer` mode is deliberately refused; `render` mode requires `RENDER=true` (provided
-by Render), `PUBLIC_RENDER_IP_VERIFIED=true`, and a valid single `True-Client-IP`
-header. It does not fall back to client-provided X-Forwarded-For values.
+The server-issued opaque visitor credential is bound to a server-derived network HMAC. Raw IPs are not
+stored. IPv4-mapped IPv6 is normalized; IPv6 is grouped by /64. Local peer mode ignores forwarded headers.
+On Render, peer mode is rejected; Render mode requires `RENDER=true`, a verified `True-Client-IP` ingress
+and the explicit verification flag. **Never set that flag just to silence a configuration error.**
+Run Uvicorn with `--no-proxy-headers` and verify Render overwrites/validates the trusted IP header on all
+routes, including direct onrender.com calls. Spoofed `True-Client-IP`, `CF-Connecting-IP`, and
+`X-Forwarded-For` must not change an attacker's network identity. If this is not guaranteed by your
+actual ingress, leave public AI off and establish a trusted edge before adapting the resolver.
 
-Before setting the verification flag, confirm on your actual Render ingress that
-`True-Client-IP` is supplied/overwritten by its trusted edge and cannot be forged by
-sending your own `True-Client-IP`, `CF-Connecting-IP` or `X-Forwarded-For` headers.
-Use a temporary private/logging check or Render support while AI remains disabled;
-do not publish a debug endpoint or log visitor credentials. Confirm distinct clients
-produce distinct IP buckets. If this header is absent or not protected on your
-service, **leave public mode disabled** and configure a verified trusted ingress
-before adapting the resolver. No live ingress assertion was made during local tests.
-All traffic must traverse that ingress, including direct calls to onrender.com.
+Each network permits two operation attempts/minute and ten visitor token issuances/hour. Each visitor
+and network has a lifetime two-operation ceiling. Shared Wi-Fi/NAT users may share an allowance.
+Clearing storage does not replenish the network limit; different networks/VPNs can evade individual
+limits, but the global operation and estimated-dollar ceilings remain independent and effective.
+Bots can exhaust a free public allowance; this is not identity verification or a CAPTCHA system.
 
-IPs are stored as HMAC digests rather than raw addresses. IPv4-mapped IPv6 is
-normalized; ordinary IPv6 addresses are grouped by /64. Each network receives a
-lifetime ceiling of two reservations, plus a two-per-minute operation limit and
-ten anonymous-session issuances per hour. The network ceiling prevents a browser
-reload/new anonymous token from granting new uses on the same network. NAT/shared
-Wi-Fi can cause unrelated people to share this allowance. VPNs/network changes can
-obtain different buckets; the independent global ten-operation cap still applies.
+Public uploads check extension, MP3/WAV container signature, actual ffprobe audio codec, duration and size
+before voice/quality processing. Speech fields exceeding 200 characters are rejected before voice setup.
+Simultaneous preview/transcription requests for one recording are rejected while its lock is held.
+Existing successful ASR selections and voice models are reused. Public TTS requests have **no automatic
+retries**, including 429/5xx/connection errors; explicit retries need new reservations.
 
-## Operator commands and emergency stop
+Two operations are **not two complete edits**. Voice setup + TTS usually consumes both; Change Delivery
+may also require ASR. Voice status polling can consume allowance before a preview is ready. All existing
+editing features remain available, but this intentionally strict public quota limits their AI usage.
+Apply a saved preview, local cleanup, multiple edits, Undo/Redo, A/B playback and MP3 export do not reserve
+Fish operations. Cached/local operations do not reset counters. Audio sessions themselves retain their
+existing in-memory/ephemeral lifetime; quotas persist independently.
 
-The CLI is private tooling, never a public admin route. Configure its environment
-locally (or use ignored `backend/.env`) with the **same** Upstash credentials as Render.
-From the repository root:
+Public quota errors use:
+- "Demo limit reached. You've used your available AI edits."
+- "The public demo has reached its usage limit. Please try again later."
+
+Public provider failures omit configuration instructions and raw provider bodies. API keys never leave
+the backend. Existing visual design, name, tagline and editing controls have not been redesigned.
+
+## Setup, costs and strict deployment sequence
+
+1. Keep production `AI_ACCESS_MODE=demo`, and both public switches false. Finish active recordings before
+   any backend restart; the existing app's audio sessions are not durable.
+2. Verify the existing Upstash credentials, database durability/no-eviction/retention and budget contents.
+   Do not use an unclaimed temporary database or create a new database to reset historical usage.
+   Current Upstash free pricing lists 250 MB and 500,000 commands/month. Pay-as-you-go is $0.20/100,000
+   commands; Lua scripts execute multiple commands. A free-tier outage/exhaustion blocks AI rather than
+   allowing untracked calls. Plan/retention terms need confirmation in the actual account.
+3. Configure Render secrets and public limits from `.env.example`. No new Fish key/provider is required.
+   The IP secret and verified ingress configuration are still missing locally. Do not paste secrets in chat.
+4. Set Render's existing start command to use `--no-proxy-headers`, preserving its existing app directory,
+   host and `$PORT` handling. No Render blueprint or Vercel deployment manifest exists in this repo;
+   actual dashboard settings cannot be inferred from local source. Existing CORS defaults include
+   `https://tweeq-ruby.vercel.app`; set `CORS_ORIGINS` to your exact intended domain if different.
+5. Deploy code with public AI still disabled. Use a separate staging Redis database and mocked Fish
+   transport to repeat quota/concurrency/restart tests across actual Render workers. A local emulator
+   result does not prove production durability or ingress behavior. Do not call live paid endpoints to
+   check whether the guard is installed.
+6. Initialize **once**, only if the production budget has never existed. For existing schema 1, disable
+   then use `migrate`; migration preserves counters and refuses any nonzero historical usage until
+   billing is manually reconciled. Never delete/reinitialize an existing allowance.
+7. Verify provider prices/voice fees, then set `PUBLIC_COST_REVIEWED=true`. Enable the Redis budget,
+   change Render to public mode and set both public enable switches true. No code/token UI is shown
+   in this mode. Keep `DEMO_ACCESS_TOKEN` only for controlled rollback; public mode ignores it.
+8. The existing frontend needs only `VITE_API_BASE_URL=https://tweeq-backend.onrender.com` on Vercel.
+   It already renders the public usage state without a code; a frontend redesign is unnecessary.
+9. Verify incognito access, exact CORS, trusted IP binding, limits, disabled-store failure and emergency
+   shutdown with mocked production-shaped provider traffic. This phase has **not** run in production.
+   Only remove obsolete rollback demo configuration after rollout is verified.
+
+Local/private operator commands (same production datastore settings; never public HTTP routes):
 
 ```powershell
-.\.venv\Scripts\python.exe backend/manage_public_usage.py initialize
 .\.venv\Scripts\python.exe backend/manage_public_usage.py inspect
-```
-
-Initialization creates only the global schema/zero counter **disabled**, and refuses
-to overwrite an existing budget. Do it once for a genuinely new public launch,
-never as a startup/build step. After configuration and ingress verification:
-
-```powershell
+.\.venv\Scripts\python.exe backend/manage_public_usage.py initialize
+# OR, for an existing disabled zero-use schema-1 budget:
+.\.venv\Scripts\python.exe backend/manage_public_usage.py migrate
 .\.venv\Scripts\python.exe backend/manage_public_usage.py enable
 ```
 
-Then set `AI_ACCESS_MODE=public` and `PUBLIC_GENERATIONS_ENABLED=true` on Render
-and restart/redeploy the backend when you authorize deployment. The public frontend
-needs only `VITE_API_BASE_URL=https://tweeq-backend.onrender.com`; rebuild Vercel.
-No quota secrets belong in `VITE_` variables.
+## Monitoring, adjustment and emergency stop
 
-For an immediate emergency stop, without waiting for a Render restart:
+`inspect` reports global `used`, `reserved_microusd`, `active`, stored limits, schema and enabled state.
+Divide microdollars by 1,000,000 locally for the estimated-dollar reserve. Inspect the nonexpiring ledger,
+pending set and reservation records in the private Redis console. Reconcile manually against Fish billing;
+no documented reliable automated invoice reconciliation was established. Retain full unknown costs.
+
+For an immediate stop, without waiting for a Render redeploy:
 
 ```powershell
 .\.venv\Scripts\python.exe backend/manage_public_usage.py disable
 ```
 
-Or, in the Upstash console: `HSET tweeq:{public-v1}:budget enabled 0`.
-This is checked inside **every** reservation, without a cache. It blocks future
-reservations, including later steps/retries in an already-started preview. Calls
-already reserved/dispatched cannot be recalled. Also set
-`PUBLIC_GENERATIONS_ENABLED=false` on Render for an environment-level stop.
-Neither switch resets usage. To roll back to demo access set `AI_ACCESS_MODE=demo`;
-the previous password gate and UI remain available in that mode only.
+Also set `PUBLIC_AI_ENABLED=false` on Render. An explicitly false legacy switch blocks calls too.
+The datastore flag is checked on every new reservation; already reserved/dispatched provider requests
+cannot be recalled. Neither switch resets counters. Local editing/playback/export remain available.
 
-## Anonymous sessions and frontend behavior
+To adjust caps: disable, update backend environment values, run `configure`, inspect, then reenable
+only after validation. Raising limits deliberately authorizes a larger allowance. Avoid changing limits
+while requests are pending. For interrupted slots, disable and stop **all** backend workers first; verify
+no provider operation can still be running, inspect `SMEMBERS tweeq:{public-v1}:pending`, then run
+`manage_public_usage.py resolve <reservation-id>`. This releases only the slot; no spend/quota is refunded.
+Do not resolve a pending record while its original worker could still dispatch or finish a call.
 
-`POST /api/public/session` mints a cryptographically random opaque token, stores
-its hash and IP binding in Redis, and returns the token over HTTPS. The frontend
-keeps this credential in sessionStorage (memory fallback if unavailable), sends it
-in `X-Visitor-Session`, and refreshes authoritative usage after every AI request,
-including failures. Browser-stored counts are never trusted. This avoids relying
-on third-party cookies between vercel.app and onrender.com. The token is a bearer
-credential; it never appears in audio URLs. Sessions do not uniquely identify people.
+## Local verification and remaining production checks
 
-`GET /api/public/usage` returns remaining visitor/global allowance and explanatory
-text. Public mode displays this instead of the demo password. Storage or quota
-errors display an availability/limit message; no client error automatically retries
-a paid operation. CORS permits the new header only for the existing allowed origins.
-Direct callers must pass the same server-session/IP/quota checks. CORS itself is
-not authorization. Status reads do not reserve a provider operation.
+The complete 106-test backend suite passed before final refinements; all 36 final budget/security tests
+passed afterward, including operator migration/configuration. The earlier targeted editing run passed its
+workflow/access checks; two operator-test isolation failures were corrected and rerun successfully.
+45 frontend checks passed, including code-free public-mode UI, failure states, two independent edits,
+preview/apply, Undo/Redo and export. Tests use the actual Lua scripts in fakeredis and mocked HTTP providers.
+The test suite blocks real asynchronous network transports to prevent accidental paid requests.
+Production is still gated, datastore authentication failed safely with HTTP 401, and incognito/live ingress/durable
+restart tests remain pending. No real Fish Audio credits were consumed.
 
-## Verification and remaining limits
+The current backend secret values were not found in tracked Git history; backend/.env is untracked/ignored.
+This exact-value audit is not proof that every historical/unknown credential is absent. Existing audio
+retention, per-recording ownership, generic upload/storage DoS protection and anonymous-identity evasion
+remain limitations beyond the paid-credit gate.
 
-Tests execute the actual production Lua in fakeredis with Lua support; concurrent
-requests, new datastore clients, both quota ceilings, issuance throttling, corrupted
-or missing state, disabled switches, malformed REST responses, direct API bypass
-attempts, retries and partial multi-call previews are covered. Provider HTTP calls
-are mocked. Existing editing regression tests remain in place. No Upstash account
-or real provider was accessed. An actual Upstash persistence/restart check and Render
-IP-spoofing verification still require your external setup; keep the demo mode until
-those pass. Test Upstash with a separate staging database to avoid altering the
-production ten-use budget. Never test a live generation just to check configuration.
+## Official references
 
-The cap bounds operation count, **not dollars or characters**. Normal existing text
-and duration limits still apply. This does not add user accounts, per-recording
-ownership, CAPTCHA, upload/storage DoS protection or durable audio sessions.
-Recordings/sessions remain subject to Render's existing ephemeral storage/restart
-behavior even though quotas persist externally. A bot can exhaust a public free
-allowance; IP sessions reduce abuse rather than prove identity. Upstash availability,
-quota limits and data integrity are prerequisites; outages fail closed.
+- [Fish API pricing and ASR rounding](https://docs.fish.audio/developer-guide/models-pricing/pricing-and-rate-limits)
+- [Fish saved voice creation API](https://docs.fish.audio/api-reference/endpoint/model/create-model)
+- [Upstash pricing](https://upstash.com/pricing/redis)
+- [Upstash REST API](https://upstash.com/docs/redis/features/restapi)
+- [Upstash durability](https://upstash.com/docs/redis/features/durability)
+- [Redis atomic Lua execution](https://redis.io/docs/latest/develop/programmability/eval-intro/)
 
-References: [Upstash REST API](https://upstash.com/docs/redis/features/restapi),
-[durability](https://upstash.com/docs/redis/features/durability),
-[Redis Lua atomic execution](https://redis.io/docs/latest/interact/programmability/eval-intro/),
-[Render ingress guidance](https://render.com/articles/how-render-handles-ddos-attacks),
-[Cloudflare IP headers](https://developers.cloudflare.com/fundamentals/reference/http-headers/).
+## Modified files
+
+- `backend/app/public_usage.py`: atomic dollar/quota ledger, reservations, concurrency and emergency guards.
+- `backend/app/fish_audio.py`: operation-specific reservations/finalization and no public TTS retries.
+- `backend/app/main.py`: public input limits, duplicate-inflight rejection, generic provider errors and exact configurable CORS.
+- `backend/app/audio.py`: optional pre-decode public duration limit, preserving default internal behavior.
+- `backend/manage_public_usage.py`: schema initialization/migration, inspect/configure, shutdown and pending-slot recovery.
+- `backend/tests/test_public_usage.py`: real-Lua quota, cost, corruption, concurrency, persistence and operator tests.
+- `backend/tests/conftest.py`: forbid real async network transports during tests.
+- `.env.example`, `README.md`, `PUBLIC_USAGE.md`: configuration, risk and rollout documentation.
+
+All frontend sources, UI styling/wording, Fish model selection and audio splice/Undo/Redo algorithms remain unchanged.
+Existing unrelated untracked `migrations/` files were not changed.
