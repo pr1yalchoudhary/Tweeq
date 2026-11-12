@@ -1,4 +1,4 @@
-"""Private Render-shell verification. Real Redis, isolated keys, mocked Fish only.
+"""Private Render startup/Shell verification. Real Redis, mocked Fish only.
 
 No runtime endpoint or application mock mode is installed. No production budget
 is initialized, enabled, charged, reset or otherwise modified by this command.
@@ -173,6 +173,13 @@ async def start(root, state):
     require(callable(getattr(usage, 'estimate', None)) and hasattr(usage, 'FINISH'),
             'Deploy the current schema-2 dollar-budget safeguards before verifying.')
     await authenticate()
+    existing = await usage.command('GET', root + 'metadata')
+    if existing is not None:
+        # Free instances can restart automatically. A completed fixed-ID run must
+        # never recreate fixtures, consume new slots, or prevent normal startup.
+        result = await resume(root)
+        return {**result, 'existing_start_rechecked': True, 'mocked_provider_requests': 0,
+                'note': 'Completed verification fixtures rechecked without rerunning or resetting them.'}
     before = await production_state()
     snapshots = {}
     passed = ['datastore_authentication']

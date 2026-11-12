@@ -1,5 +1,78 @@
 # Verify the deployed public allowance without Fish Audio credits
 
+## Render free instances: use startup verification
+
+Shell, SSH, one-off jobs and a paid pre-deploy command are **not required**. Use
+Render's existing Start Command temporarily and read the JSON in account-protected
+deploy logs. There is no verification HTTP endpoint, token in a URL, or public
+admin interface. The ordinary demo access restriction remains in place.
+
+First open Render Dashboard → your backend service → **Settings** → **Build & Deploy**.
+Read **Root Directory** and **Start Command**. Preserve the exact original Start
+Command separately before editing it. Match the script path to that root directory:
+
+| Render root | Operator path | Verifier path |
+|---|---|---|
+| repository root (blank) | `backend/manage_public_usage.py` | `backend/verify_public_usage.py` |
+| `backend` | `manage_public_usage.py` | `verify_public_usage.py` |
+
+The following are templates; substitute the actual paths and the exact original
+server command. Do not paste the literal placeholder into Render. A command that
+already changes directories or uses shell operators needs careful quoting.
+
+1. Keep production in `AI_ACCESS_MODE=demo`, with `PUBLIC_AI_ENABLED=false` and
+   `PUBLIC_GENERATIONS_ENABLED=false`. Do not edit the actual Fish key or models.
+2. Temporarily prepend a read-only inspection to the Start Command:
+   `python -u OPERATOR_PATH inspect && ORIGINAL_START_COMMAND`. Save and deploy.
+   Open **Deploys**, select this deploy and inspect its logs. Successful budget
+   output, including an empty result, establishes Redis authentication. No Fish
+   request is involved. Empty/schema-1 state requires safe initialization/migration
+   separately; never delete or reset existing counters to obtain a pass.
+3. Use a fresh fixed 32-character hexadecimal run ID and temporarily set:
+   `python -u VERIFIER_PATH start --run-id RUN_ID && ORIGINAL_START_COMMAND`.
+   This executes the existing real-Redis verifier in an isolated process before
+   launching Uvicorn. Its Fish transport is always mocked. Temporary public-mode
+   flags/key mocks stay in that child process and cannot change the server's
+   inherited environment. Expect the JSON `passed` list and retain the run ID.
+4. For persistence, set the Start Command to:
+   `python -u VERIFIER_PATH resume --run-id RUN_ID && ORIGINAL_START_COMMAND`.
+   Saving/deploying this change creates a new Render service instance, so it is
+   the actual backend restart separating start and resume. Confirm the deployment
+   events and the same guard commit. Inspect the new deployment's JSON report.
+   No local disk or Shell history is needed; snapshots live in isolated Redis keys.
+5. Once results are collected, set the Start Command to:
+   `python -u VERIFIER_PATH cleanup --run-id RUN_ID && ORIGINAL_START_COMMAND`.
+   It deletes only that run's test namespace; production counters remain untouched.
+6. **Restore the exact original Start Command**, save and deploy again. Confirm
+   that this final start runs the normal server directly and `/api/public/usage`
+   still reports demo mode. No verification runs are left in the live startup
+   path, and no temporary endpoint or new credential exists to remove. The
+   existing private CLI may remain in the repository as operator tooling.
+
+Completed fixed-ID start runs are idempotent: if a free instance restarts before
+the temporary command is restored, the verifier rechecks its completed fixtures
+without recreating counters or dispatching more mock requests. A partial/failed
+run is never silently reset. Restore the original Start Command if a verification
+failure blocks deployment, investigate the failure, then use a new run ID only
+for isolated fixtures. All commands use `&&`: a failed check cannot be mistaken
+for a successful verification followed by normal service startup.
+
+Render permits the Start Command to run for up to 15 minutes. It starts Uvicorn
+only after verification finishes, so the deploy's health check may wait. Do not
+use build logs alone as evidence of the updated runtime environment. The private
+deploy logs contain only sanitized results, run IDs and counters; no keys or
+recordings are printed. The verifier uses ordinary Upstash commands against the
+existing database (normal datastore quota/charges apply), with zero Fish charges.
+
+Free startup verification tests the deployed guard against real Upstash. It does
+not by itself prove ingress IP trust, safe production budget initialization or
+an exact provider invoice cap. Those prerequisites still apply before public AI
+may be enabled. Keep the demo restriction throughout this procedure.
+
+Official references: [Render free-instance limitations](https://render.com/docs/free),
+[Start Command and deployment behavior](https://render.com/docs/deploys),
+[account dashboard logs](https://render.com/docs/logging).
+
 ## Current evidence
 
 The latest external checks returned HTTP 200 for the deployed frontend, backend health,
@@ -7,14 +80,16 @@ and `/api/public/usage`. That usage response still reports `mode: demo`. In this
 the public status endpoint deliberately does not contact Upstash. A successful redeploy
 and a healthy FastAPI response do **not** verify Redis authentication or the budget.
 
-Render dashboard credentials and shell access are not available to this local agent.
+The owner confirms commit `94d453b` is Live. The service uses the free instance,
+which has no Shell access. The startup procedure above replaces that requirement.
+Render dashboard credentials are not available to this local agent.
 The corrected Upstash values were entered in Render, not necessarily in local `.env`.
 No claim that the previous datastore HTTP 401 is resolved can be made until a check
 runs in Render's environment. No production paid endpoint was called during these checks.
 
-Also, this checkout's dollar-budget/reservation changes are still uncommitted relative
-to `b16bb6f`. Deploy the current guard code and private verification tool before testing.
-A credentials-only redeploy of that older commit is insufficient. This tool does not
+The dollar-budget/reservation implementation was committed and pushed as `94d453b`.
+Deploy the latest small verifier restart-safety update before the free startup tests.
+A credentials-only redeploy of the older `b16bb6f` commit is insufficient. This tool does not
 push, deploy, initialize the production allowance, or change Render environment settings.
 
 The latest local run passed **117 backend tests**, including the private verifier,
@@ -35,7 +110,7 @@ git push
 Confirm Render deploys that new commit with public AI still disabled. No commit,
 push or production deployment was performed by the agent during this verification.
 
-## First: confirm authentication from Render Shell
+## Optional alternative for hosts that provide Shell
 
 Keep `AI_ACCESS_MODE=demo`, `PUBLIC_AI_ENABLED=false` and
 `PUBLIC_GENERATIONS_ENABLED=false`. From the repository root in Render Shell:

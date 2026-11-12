@@ -67,6 +67,26 @@ def test_bad_credentials_report_http_401_without_provider_access(datastore, monk
     assert not list(datastore.scan_iter())
 
 
+def test_completed_start_is_safe_on_free_instance_restart(datastore):
+    result = asyncio.run(probe.main('start', 'd' * 32))
+    key = probe.root_for('d' * 32) + 'dollars:budget'
+    before = datastore.hgetall(key)
+    repeated = asyncio.run(probe.main('start', 'd' * 32))
+    assert repeated['existing_start_rechecked'] is True
+    assert repeated['mocked_provider_requests'] == 0
+    assert repeated['render_restart_independently_verified'] is False
+    assert datastore.hgetall(key) == before
+    assert result['mocked_provider_requests'] == 23
+
+
+def test_partial_failed_start_never_resets_existing_test_counters(datastore):
+    root = probe.root_for('e' * 32)
+    datastore.hset(root + 'visitor:budget', mapping={'schema': '2', 'used': '1'})
+    with pytest.raises(probe.VerificationFailure, match='already exists'):
+        asyncio.run(probe.main('start', 'e' * 32))
+    assert datastore.hget(root + 'visitor:budget', 'used') == '1'
+
+
 @pytest.mark.parametrize('run_id', ['public-v1', '../public-v1', '', 'x' * 32])
 def test_production_or_invalid_namespace_is_never_accepted(run_id):
     with pytest.raises(probe.VerificationFailure):
