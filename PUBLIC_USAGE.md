@@ -2,16 +2,21 @@
 
 ## Current rollout status
 
-The protection changes are implemented and tested locally. **Public production access is not enabled.**
-The live backend's read-only `/api/public/usage` response still says `mode: demo`.
-The latest frontend and backend health checks both return HTTP 200. The owner reports
-correcting Upstash credentials in Render and redeploying. That private authentication
-is not observable through the demo-mode public status route. The earlier HTTP 401
-was a local credential diagnostic, not a test of the newly updated Render settings.
-See [PUBLIC_VERIFICATION.md](PUBLIC_VERIFICATION.md) for safe Render-shell verification.
-No counters were initialized, migrated, reset or enabled; no deployments or paid Fish requests occurred.
-No Render/Vercel deployment credentials are configured locally. Verify the datastore and Render
-IP ingress before switching modes. The existing access code remains in demo mode as required during rollout.
+The protection changes are implemented and deployed. **Public production access is not enabled.**
+The owner completed the free-tier startup checks using the real Upstash datastore,
+mocked provider transport, isolated fixture keys and an actual Render redeploy between
+start/resume. Authentication, quota/estimated-dollar caps, emergency switches and
+persistence checks passed; isolated test keys were cleaned up. Production was then
+initialized with schema 2, $2 estimated budget, ten global operations, two per visitor/
+network, concurrency one, zero use and `enabled=0`.
+
+Live ingress checks observed no header-based identity bypass. The temporary authenticated
+health diagnostic wrapper was deactivated, verified absent on both authenticated and
+unauthenticated health responses, and removed from source. The ordinary Start Command
+now includes `--no-proxy-headers`. Live `/api/public/usage` still reports `mode: demo`.
+The UI and Fish model/reference/audio settings are unchanged; no paid tests occurred.
+See [PUBLIC_VERIFICATION.md](PUBLIC_VERIFICATION.md) for evidence, scope and remaining
+configuration checks. Do not enable public AI until the deliberate final setup is complete.
 
 ## Architecture
 

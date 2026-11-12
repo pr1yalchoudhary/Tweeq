@@ -207,28 +207,31 @@ It rejects missing/duplicate/comma-joined values and ignores `True-Client-IP` an
 `X-Forwarded-For` for public network identity. The verification flag remains false
 until real ingress testing is complete.
 
-A **temporary** ASGI wrapper (`ip_verification_app:app`) can be selected in the
-Start Command for the existing `/api/health` URL. It forwards every ordinary
-request to the unchanged app. Only GET health requests with the existing valid
-demo bearer credential receive an additional `X-Tweeq-IP-Check` response header.
-No new URL, unauthenticated diagnostic response, API key, Redis operation or paid
-provider request is introduced. Diagnostics contain validity/disabled-state flags
-and a per-instance ephemeral network fingerprint, never raw IPs or credentials.
-The diagnostic credential must be sent privately in the Authorization header,
-never pasted into chat, URLs, source or startup commands.
+The temporary authenticated health diagnostic wrapper has now been removed from
+source after restoring `app.main:app`. Both authenticated and unauthenticated live
+GET `/api/health` checks returned HTTP 200 with no diagnostic header; public usage
+still reports demo mode. A permanent regression test guards this removal.
 
-After activating that wrapper with `--no-proxy-headers`, send an authenticated
-baseline health request and requests attempting to forge `CF-Connecting-IP`,
-`True-Client-IP`, and `X-Forwarded-For` with RFC 5737 test addresses. Require a
-single valid edge header, no selected test address and a stable fingerprint from
-the same client/instance. Also verify unauthenticated callers receive no
-diagnostic header. These calls neither create visitor sessions nor touch quotas.
+Recorded production verification:
+- The owner supplied successful real-Upstash `start`, actual Render redeploy/resume,
+  and cleanup results for isolated run `8c204b8f27e142b8b5efb66d6f03c7a1`.
+- Those tests covered visitor/global limits, the $2 estimate independently, both
+  shutdown switches, interruptions/no refunds, and durable pending/counter state.
+- Isolated fixture cleanup reported no production-key modifications.
+- The production budget was initialized disabled: schema 2, $2 estimate, ten global,
+  two visitor/network operations, concurrency one, used/reserved/active all zero.
+- Accepted authenticated health requests had a valid edge IP and stable ephemeral
+  fingerprint despite forged `True-Client-IP` / `X-Forwarded-For`. Requests forging
+  `CF-Connecting-IP` were rejected with Cloudflare HTTP 403, so overwrite behavior
+  was not directly observed for those rejected requests. No identity bypass was
+  observed. Unauthenticated requests received no diagnostics.
+- The IP hash secret was present, demo mode active, and both public-AI switches
+  disabled during the ingress checks. No provider requests or quota writes occurred.
 
-Immediately after recording the results, restore `app.main:app` with
-`--no-proxy-headers`, then delete the temporary wrapper and its dedicated tests
-from the deployed source. Confirm diagnostics are absent after cleanup. No
-temporary verification route or credential should remain. The normalizer and
-strict header checks are permanent public-credit protection.
+No temporary ASGI wrapper, diagnostic route or diagnostic credential remains.
+Only the existing private operator CLI and permanent strict IP validation remain.
+The production IP-source/verification settings and cost-review/enable steps still
+require deliberate configuration before public access can be activated.
 
 An isolated pass proves the adapter/Lua behavior against the real datastore, but it
 does not prove the live HTTP ingress identifies visitor networks correctly. Before

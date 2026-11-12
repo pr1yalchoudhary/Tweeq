@@ -41,3 +41,15 @@ def test_cors_allows_deployed_and_local_frontends_only():
         response = client.options('/api/preview', headers={'Origin': 'https://untrusted.example',
             'Access-Control-Request-Method': 'POST'})
         assert 'access-control-allow-origin' not in response.headers
+
+
+@pytest.mark.parametrize('authorized', [False, True])
+def test_health_never_exposes_removed_ingress_diagnostics(monkeypatch, authorized):
+    token = 'local-health-regression-token-at-least-32-characters'
+    monkeypatch.setenv('DEMO_ACCESS_TOKEN', token)
+    headers = {'Authorization': 'Bearer ' + token} if authorized else {}
+    with TestClient(main.app) as client:
+        response = client.get('/api/health', headers=headers)
+        assert response.status_code == 200
+        assert 'x-tweeq-ip-check' not in response.headers
+        assert set(response.json()) == {'status', 'fish_configured', 'ffmpeg', 'ffprobe'}
