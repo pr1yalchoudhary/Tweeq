@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
     "build": "vite build",
-    "test": "node --test src/deliveryText.test.js && vitest run"
+    "test": "node --test src/deliveryText.test.js && vitest run",
+    "test:visual": "playwright test"
   },
   "dependencies": {
     "react": "^19.2.0",
@@ -14,6 +15,7 @@
     "wavesurfer.js": "^7.10.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.1",
     "@tailwindcss/vite": "^4.1.0",
     "@vitejs/plugin-react": "^5.1.0",
     "jsdom": "^26.1.0",

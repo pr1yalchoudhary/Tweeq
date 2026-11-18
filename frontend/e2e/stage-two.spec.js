@@ -1,0 +1,247 @@
+import { test, expect } from '@playwright/test'
+import path from 'node:path'
+import fs from 'node:fs/promises'
+
+const artifacts = path.resolve('..', 'test-results', 'stage-two', 'artifacts')
+function audio(seconds = 13.6, tone = 190) {
+  const rate = 16000, samples = Math.round(seconds * rate), out = Buffer.alloc(44 + samples * 2)
+  out.write('RIFF'); out.writeUInt32LE(out.length - 8, 4); out.write('WAVEfmt ', 8); out.writeUInt32LE(16, 16)
+  out.writeUInt16LE(1, 20); out.writeUInt16LE(1, 22); out.writeUInt32LE(rate, 24); out.writeUInt32LE(rate * 2, 28)
+  out.writeUInt16LE(2, 32); out.writeUInt16LE(16, 34); out.write('data', 36); out.writeUInt32LE(samples * 2, 40)
+  for (let i = 0; i < samples; i++) {
+    const t = i / rate, envelope = Math.max(0, Math.sin(t * 2.3)) * (.25 + .75 * Math.abs(Math.sin(t * 13)))
+    out.writeInt16LE(Math.round(Math.sin(t * 2 * Math.PI * tone) * envelope * 11000), 44 + i * 2)
+  }
+  return out
+}
+async function setup(page, { failPreview = false, failTranscription = false, holdPreview = false, holdReplace = false } = {}) {
+  const calls = [], blocked = [], errors = [], history = [], previewDurations = new Map(), previewGates = [], replaceGates = []
+  let revision = 0, applied = 0, previewNumber = 0, savedPreview
+  const base = { session_id: 'stage-two-local', name: 'Launch announcement.wav', original_duration: 13.6,
+    voice_status: 'ready', voice_prepared: true, reference_revision: 0, reference: { start: 0, end: 10 },
+    quality: { status: 'good', warnings: [] }, cleanup_available: false }
+  const session = () => ({ ...base, revision, duration: 13.6 + applied * .2, edit_count: applied,
+    can_redo: applied < history.length, edit_history: history.map((item, i) => ({ ...item, status: i < applied ? 'applied' : 'undone' })) })
+  page.on('pageerror', error => errors.push(error.message))
+  await page.context().route('**/*', async route => {
+    const req = route.request(), url = new URL(req.url())
+    if (!url.pathname.startsWith('/api/')) {
+      if (url.origin === 'http://127.0.0.1:5174') return route.continue()
+      blocked.push(url.href); return route.abort()
+    }
+    const body = req.headers()['content-type']?.includes('application/json') ? req.postDataJSON() : {}
+    calls.push({ path: url.pathname, method: req.method(), body: req.method() === 'POST' && !url.pathname.endsWith('upload') ? body : null, query: url.search })
+    const json = value => route.fulfill({ json: value })
+    if (url.pathname.startsWith('/api/public/')) return json({ mode: 'public', session_token: 'local-only', remaining: 2, global_remaining: 10, message: 'Each voice setup, speech detection and generation uses one allowance. Failed attempts count too.' })
+    if (url.pathname === '/api/upload') return json(session())
+    if (url.pathname.startsWith('/api/audio/')) return route.fulfill({ contentType: 'audio/wav', body: audio(url.searchParams.get('version') === 'original' ? 13.6 : session().duration, 190 + applied * 10) })
+    if (url.pathname === '/api/transcribe' && failTranscription) return route.fulfill({ status: 503, json: { detail: 'Local speech detection failure.' } })
+    if (url.pathname === '/api/transcribe') return json({ ...body, text: "And I can't wait for you to try it!" })
+    if (url.pathname === '/api/preview') {
+      if (holdPreview) await new Promise(resolve => previewGates.push(resolve))
+      if (failPreview) return route.fulfill({ status: 503, json: { detail: 'Local fixture: generation unavailable. Please try again.' } })
+      savedPreview = body; previewNumber++
+      previewDurations.set(`local-preview-${previewNumber}`, body.end - body.start + .2)
+      return json({ preview_id: `local-preview-${previewNumber}`, preview_url: `/api/preview/local-preview-${previewNumber}`, duration: body.end - body.start + .2, duration_change: .2, mode: body.mode, voice_prepared: true })
+    }
+    if (url.pathname.startsWith('/api/preview/local-preview-')) return route.fulfill({ contentType: 'audio/wav', body: audio(previewDurations.get(url.pathname.split('/').at(-1)), 200) })
+    if (url.pathname === '/api/replace') {
+      if (holdReplace) await new Promise(resolve => replaceGates.push(resolve))
+      expect(body.revision).toBe(revision); expect(body.preview_id).toBe(`local-preview-${previewNumber}`)
+      expect(body.start).toBe(savedPreview.start); expect(body.end).toBe(savedPreview.end); expect(body.mode).toBe(savedPreview.mode)
+      history.splice(applied)
+      history.push({ number: history.length + 1, mode: body.mode, original_text: savedPreview.original_text || '', replacement_text: savedPreview.replacement_text, direction: savedPreview.direction })
+      applied++; revision++; return json(session())
+    }
+    if (url.pathname.startsWith('/api/undo/')) { applied--; revision++; return json(session()) }
+    if (url.pathname.startsWith('/api/redo/')) { applied++; revision++; return json(session()) }
+    if (url.pathname.startsWith('/api/export/')) return route.fulfill({ contentType: 'audio/mpeg', body: Buffer.from('ID3-local-mocked-export') })
+    blocked.push(url.pathname); return route.abort()
+  })
+  await page.goto('/')
+  await page.getByLabel('Choose File', { exact: true }).setInputFiles({ name: base.name, mimeType: 'audio/wav', buffer: audio() })
+  await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Open recording' }).click()
+  await expect(page.getByRole('button', { name: 'Play current recording', exact: true })).toBeEnabled()
+  await page.evaluate(() => document.fonts.ready)
+  await fs.mkdir(artifacts, { recursive: true })
+  return { calls, blocked, errors, releasePreview: () => previewGates.shift()?.(), releaseReplace: () => replaceGates.shift()?.() }
+}
+async function select(page, start, end) {
+  await page.getByLabel('Selection start in seconds').fill(String(start))
+  await page.getByLabel('Selection end in seconds').fill(String(end))
+  await page.getByLabel('Selection end in seconds').blur()
+  await expect(page.locator('#step-edit')).toBeVisible()
+}
+async function capture(page, name, top = true) {
+  if (top) await page.locator('main').evaluate(el => { el.scrollTop = 0 })
+  await page.screenshot({ path: path.join(artifacts, name + '-1918x955.png') })
+}
+
+test('selected waveform, preview, two modes, sequential apply, compare, undo/redo and export', async ({ page }) => {
+  const state = await setup(page)
+  // Use real WaveSurfer drag selection, then exact fields to finalize the desired phrase.
+  const wave = await page.locator('.wave').boundingBox()
+  await page.mouse.move(wave.x + wave.width * .1, wave.y + 90)
+  await page.mouse.down(); await page.mouse.move(wave.x + wave.width * .45, wave.y + 90, { steps: 12 }); await page.mouse.up()
+  await expect(page.locator('#step-edit')).toBeVisible()
+  await select(page, 1.1, 6.1)
+  await page.getByLabel('What should it say instead?').fill("We're launching the new version next Friday.")
+  await page.locator('.history-words summary').click()
+  await page.getByLabel('Original selected words (optional, for history)').fill("We're launching the new version next Monday.")
+  await capture(page, 'correct-speech-selection')
+  await page.getByRole('button', { name: 'Play selection', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Pause recording', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Pause recording', exact: true }).click()
+  await page.getByRole('button', { name: 'Zoom in', exact: true }).click()
+  await expect(page.locator('.zoom-controls output')).toHaveText('2×')
+  await page.getByRole('button', { name: 'Reset zoom' }).click()
+  await page.getByRole('button', { name: 'Generate Preview', exact: true }).click()
+  await expect(page.getByLabel('Generated replacement speech')).toBeVisible()
+  await page.getByLabel('Generated replacement speech').evaluate(el => el.play())
+  await expect.poll(() => page.getByLabel('Generated replacement speech').evaluate(el => el.paused)).toBe(false)
+  await page.getByLabel('Generated replacement speech').evaluate(el => { el.pause(); el.currentTime = 0 })
+  await expect(page.getByRole('button', { name: 'Apply Edit', exact: true })).toBeEnabled()
+  await capture(page, 'correct-speech-preview')
+  await page.locator('main').evaluate(el => { el.scrollTop = 270 })
+  await capture(page, 'correct-speech-controls', false)
+  await page.getByRole('button', { name: 'Original', exact: true }).click()
+  await expect(page.getByLabel('Original recording comparison')).toHaveAttribute('src', /version=original/)
+  await page.getByLabel('Original recording comparison').evaluate(el => el.play())
+  await expect(page.locator('.comparison-label')).toContainText('Playing')
+  await page.getByLabel('Original recording comparison').evaluate(el => el.pause())
+  await page.getByRole('button', { name: 'Edited', exact: true }).click()
+  await page.getByRole('button', { name: 'Apply Edit', exact: true }).click()
+  await expect(page.locator('.success')).toContainText('Replacement applied')
+  await expect(page.getByLabel('Selection start in seconds')).toHaveValue('')
+  await expect(page.getByRole('button', { name: 'Undo last edit', exact: true })).toBeEnabled()
+  await select(page, 8, 12.6)
+  await page.getByRole('tab', { name: /Change Delivery/ }).click()
+  await expect(page.getByLabel('Your words', { exact: true })).toHaveValue("And I can't wait for you to try it!")
+  await page.getByRole('button', { name: 'Excited', exact: true }).click()
+  await capture(page, 'change-delivery-selection')
+  await page.getByRole('button', { name: 'Generate Preview', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Apply Edit', exact: true })).toBeEnabled()
+  await capture(page, 'change-delivery-preview')
+  await page.locator('main').evaluate(el => { el.scrollTop = 300 })
+  await capture(page, 'change-delivery-controls', false)
+  await page.locator('main').evaluate(el => { el.scrollTop = 550 })
+  await capture(page, 'change-delivery-presets', false)
+  await page.getByRole('button', { name: 'Apply Edit', exact: true }).click()
+  await page.locator('.history-disclosure summary').click()
+  await expect(page.locator('.edit-history li')).toHaveCount(2)
+  await expect(page.locator('.edit-history')).toContainText('warm, conversational enthusiasm')
+  await page.locator('.history-disclosure').scrollIntoViewIfNeeded()
+  await capture(page, 'applied-history', false)
+  await page.getByRole('button', { name: 'Undo last edit', exact: true }).click()
+  await expect(page.locator('.edit-history li').last()).toContainText('Undone')
+  await page.getByRole('button', { name: 'Redo last edit', exact: true }).click()
+  await expect(page.locator('.edit-history li').last()).toContainText('Applied')
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Download MP3', exact: true }).click()
+  expect((await download).suggestedFilename()).toBe('tweeq-corrected.mp3')
+  await expect(page.getByRole('heading', { name: /Your recording, corrected/ })).toBeVisible()
+  await capture(page, 'export')
+  expect(state.calls.filter(c => c.path === '/api/preview')).toHaveLength(2)
+  expect(state.calls.filter(c => c.path === '/api/replace')).toHaveLength(2)
+  expect(state.calls.find(c => c.path === '/api/transcribe').body).toMatchObject({ revision: 1, start: 8, end: 12.6 })
+  expect(state.calls.some(c => c.path.startsWith('/api/audio/') && c.query.includes('revision=4'))).toBe(true)
+  expect(state.blocked).toEqual([]); expect(state.errors).toEqual([])
+})
+
+test('failed preview remains visible and cannot be applied', async ({ page }) => {
+  const state = await setup(page, { failPreview: true })
+  await select(page, 1, 4)
+  await page.getByLabel('What should it say instead?').fill('Friday')
+  await page.getByRole('button', { name: 'Generate Preview', exact: true }).click()
+  await expect(page.locator('.preview-box')).toContainText('Local fixture: generation unavailable')
+  await expect(page.getByRole('button', { name: 'Apply Edit', exact: true })).toBeDisabled()
+  expect(state.calls.some(c => c.path === '/api/replace')).toBe(false)
+  expect(state.blocked).toEqual([]); expect(state.errors).toEqual([])
+})
+
+test('mobile editing retains accessible controls and no horizontal overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const state = await setup(page)
+  await select(page, 1, 4)
+  await page.getByRole('tab', { name: /Change Delivery/ }).click()
+  await expect(page.getByLabel('Your words', { exact: true })).not.toHaveValue('')
+  await page.getByRole('button', { name: 'Calm', exact: true }).click()
+  await page.getByRole('button', { name: 'Generate Preview', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Apply Edit', exact: true })).toBeEnabled()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  expect(await page.locator('main').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
+  await page.locator('#step-edit').scrollIntoViewIfNeeded()
+  await page.screenshot({ path: path.join(artifacts, 'mobile-delivery-390x844.png') })
+  expect(state.blocked).toEqual([]); expect(state.errors).toEqual([])
+})
+
+
+test('narrow desktop keeps editing, preview and export within the workspace', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const state = await setup(page)
+  await select(page, 1, 4)
+  await page.getByLabel('What should it say instead?').fill('We are launching Friday.')
+  await page.getByRole('button', { name: 'Generate Preview', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Apply Edit', exact: true })).toBeEnabled()
+  expect(await page.locator('main').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.locator('#step-edit').scrollIntoViewIfNeeded()
+  await page.screenshot({ path: path.join(artifacts, 'narrow-desktop-1280x800.png') })
+  expect(state.blocked).toEqual([]); expect(state.errors).toEqual([])
+})
+
+
+test('mobile single action preserves invalid, loading, valid-preview and apply states', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const state = await setup(page, { holdPreview: true, holdReplace: true })
+  await select(page, 1, 4)
+  const generate = page.getByRole('button', { name: 'Generate Preview', exact: true })
+  await expect(generate).toHaveCount(1)
+  await expect(generate).toBeDisabled()
+  await expect(page.locator('#preview-help')).toContainText('enter the replacement text')
+  await page.getByLabel('What should it say instead?').fill('Friday')
+  await page.locator('main').evaluate(el => { el.scrollTop = 0 })
+  let rect = await generate.boundingBox()
+  expect(rect.y + rect.height).toBeLessThanOrEqual(844)
+  await generate.click()
+  await expect(page.getByRole('button', { name: /^Generating replacement/ })).toBeDisabled()
+  state.releasePreview()
+  await expect(page.getByRole('button', { name: 'Apply Edit', exact: true })).toHaveCount(1)
+  await expect(page.getByRole('button', { name: 'Apply Edit', exact: true })).toBeEnabled()
+  const apply = page.getByRole('button', { name: 'Apply Edit', exact: true })
+  await page.locator('main').evaluate(el => { el.scrollTop = 0 })
+  rect = await apply.boundingBox()
+  expect(rect.y + rect.height).toBeLessThanOrEqual(844)
+  await page.getByRole('tab', { name: /Change Delivery/ }).click()
+  await expect(generate).toBeVisible()
+  await expect(page.locator('.detected-words')).not.toHaveAttribute('open', '')
+  await expect(page.getByLabel('Your words', { exact: true })).toHaveValue("And I can't wait for you to try it!")
+  await page.locator('.detected-words summary').click()
+  await page.getByLabel('Your words', { exact: true }).fill('Reviewed detected words.')
+  await page.locator('.detected-words summary').click()
+  await page.getByRole('button', { name: 'Excited', exact: true }).click()
+  await generate.click()
+  await expect(page.getByRole('button', { name: /^Generating performance/ })).toBeDisabled()
+  state.releasePreview()
+  await expect(apply).toBeEnabled()
+  await apply.click()
+  await expect(page.getByRole('button', { name: /^Applying replacement/ })).toBeDisabled()
+  state.releaseReplace()
+  await expect(page.locator('.success')).toContainText('Replacement applied')
+  await expect(generate).toHaveCount(0)
+  expect(state.calls.filter(c => c.path === '/api/replace')).toHaveLength(1)
+  expect(state.calls.filter(c => c.path === '/api/preview')).toHaveLength(2)
+  expect(state.blocked).toEqual([]); expect(state.errors).toEqual([])
+})
+
+test('failed detection opens the transcript for manual fallback and keeps validation', async ({ page }) => {
+  const state = await setup(page, { failTranscription: true })
+  await select(page, 1, 4)
+  await page.getByRole('tab', { name: /Change Delivery/ }).click()
+  await expect(page.getByLabel('Your words', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Generate Preview', exact: true })).toBeDisabled()
+  await expect(page.getByRole('alert')).toContainText('Local speech detection failure')
+  await page.getByLabel('Your words', { exact: true }).fill('Manual fallback words.')
+  await expect(page.getByRole('button', { name: 'Generate Preview', exact: true })).toBeEnabled()
+  expect(state.blocked).toEqual([]); expect(state.errors).toEqual([])
+})

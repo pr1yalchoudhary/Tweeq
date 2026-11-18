@@ -9,6 +9,9 @@ const paths = {
   arrow: 'M4 12h16m-6-6 6 6-6 6',
   check: 'm5 12 4 4L19 6',
   shield: 'M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Z',
+  sidebar: 'M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm4 0v18',
+  home: 'm3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-8H9v8H4a1 1 0 0 1-1-1V10Z',
+  history: 'M3 11a9 9 0 1 1 2 7M3 4v7h7m2-5v6l4 2',
 }
 
 export default function Icon({ name, size = 20, className = '' }) {
