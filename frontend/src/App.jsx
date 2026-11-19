@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Icon from './Icon'
-import AppHeader from './AppHeader'
+import AppShell, { UsageNotice } from './AppShell'
+import UploadScreen from './UploadScreen'
 import { request, uploadAudio, downloadAudio, setDemoAccessToken, initializeUsage, subscribeUsage } from './api'
 import { stamp } from './WaveformEditor'
 import { EMPTY_DELIVERY } from './DeliveryControls'
@@ -151,37 +152,16 @@ export default function App() {
   }
   function reset() { setCleanup(null); setSession(null); setPreview(null); setPreviewError(''); setFile(null); setConsent(false); setText(''); setOriginalText(''); setError(''); setNotice(''); setExported(false); setVersion('current'); setMode('correct'); setDelivery({ ...EMPTY_DELIVERY }) }
   const locked = !!busy
-  return <div className="app-shell">
-    <AppHeader recordingName={session?.name} busy={locked} canExport={!!(session?.edit_count ?? session?.revision)} onNew={reset} onExport={download}/>
-    <main>
-      {usage?.mode === 'public' && <section className="panel" aria-label="Free AI usage" role="status">
-        <strong>{usage.unavailable ? 'Public AI temporarily unavailable' : `${usage.remaining} free AI uses remaining`}</strong>
-        {!usage.unavailable && <p>{usage.global_remaining} public AI uses left in total. {usage.remaining === 0 && 'Your free allowance has been reached. Playback, Undo/Redo and export remain available.'}</p>}
-        <p>{usage.message}</p>
-        <small>Anonymous sessions and network limits reduce abuse; they do not identify individual people.</small>
-        {usage.unavailable && <button className="secondary" onClick={() => initializeUsage().catch(() => {})}>Check availability</button>}
-      </section>}
+  return <AppShell session={session} busy={locked} canExport={!!(session?.edit_count ?? session?.revision)} onNew={reset} onExport={download}
+    usagePanel={usage?.mode === 'public' ? <UsageNotice usage={usage} onCheck={() => initializeUsage().catch(() => {})}/> : null}>
       {usage?.mode === 'demo' && <details className="panel"><summary>Demo access</summary>
         <label>Demo access code <input type="password" autoComplete="off" spellCheck={false} aria-label="Demo access code" onChange={e => setDemoAccessToken(e.target.value)}/></label>
         <p>Required for AI previews and speech detection. Kept only until this page is reloaded. After entering your code, retry speech detection or generate a preview.</p>
       </details>}
       {error && <div role="alert" className="alert"><span>{error}</span><button className="quiet" onClick={() => setError('')} aria-label="Dismiss error">×</button></div>}
       {notice && !exported && <div role="status" className="success">{notice}</div>}
-      {!session ? <section className="upload-screen">
-        <div className="upload-card">
-          <div className={`drop-zone ${dragging ? 'dragging' : ''}`} onDragOver={e => { e.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)} onDrop={e => { e.preventDefault(); setDragging(false); if (!locked) choose(e.dataTransfer.files[0]) }}>
-            <div className="upload-icon"><Icon name="waveform" size={36}/></div>
-            <h1>Upload your recording</h1><p>Choose an audio file to get started.</p>
-            <label className={`button primary ${locked ? 'disabled' : ''}`}><Icon name="folder"/>Choose File<input disabled={locked} type="file" accept=".mp3,.wav,audio/mpeg,audio/wav" onChange={e => choose(e.target.files[0])}/></label>
-            <small>or drag and drop · MP3 or WAV · Up to 25 MB</small>
-          </div>
-          {file && <div className="selected-file"><Icon name="waveform"/><span><strong>{file.name}</strong><small>{(file.size / 1024 / 1024).toFixed(2)} MB · Ready to open</small></span></div>}
-          <label className="consent"><input type="checkbox" checked={consent} disabled={locked} onChange={e => setConsent(e.target.checked)}/><span>{CONSENT}</span></label>
-          <p className="privacy-note">Authorized voice samples and text are sent to Fish Audio when you use AI editing. Requests may consume credits.</p>
-          {file && <button className="primary wide" disabled={locked || !consent} onClick={upload}>{busy === 'upload' ? progress < 100 ? `Uploading… ${progress}%` : 'Preparing your recording…' : 'Open recording'}<Icon name="arrow"/></button>}
-          {busy === 'upload' && <progress value={progress} max="100" aria-label="Upload progress"/>}
-        </div><p className="original-note"><Icon name="shield" size={16}/>Your original recording stays untouched.</p>
-      </section> : exported ? <section className="export-screen panel">
+      {!session ? <UploadScreen file={file} dragging={dragging} locked={locked} consent={consent} busy={busy} progress={progress}
+        onChoose={choose} onDrag={setDragging} onConsent={setConsent} onUpload={upload} consentText={CONSENT}/> : exported ? <section className="export-screen panel">
         <div className="check"><Icon name="check" size={30}/></div><p className="eyebrow">GOOD WORDS. GREAT TAKE.</p><h1>Your recording,<br/><em>corrected.</em></h1>
         <p>Your MP3 is ready, and the download has started.<br/>Your original recording is still unchanged.</p>
         <div className="export-meta">MP3 · 192 kbps · {stamp(session.duration)}</div>
@@ -203,6 +183,5 @@ export default function App() {
           version={version} setVersion={setVersion} reset={reset}/>
 
       </>}
-    </main><footer><span>Tweeq <span className="muted">/ One mistake shouldn't mean another take.</span></span><span className="muted">Local editing. Your voice, with permission.</span></footer>
-  </div>
+  </AppShell>
 }

@@ -37,10 +37,10 @@ export default function EditorWorkspace({ cleanup, previewCleanup, chooseCleanup
     changeRegion(value, finalized)
     if (finalized && validSelection(value, session.duration)) setSelectedView(viewKey)
   }
-  return <div className="workspace">
+  return <div className={`workspace ${showEditing ? 'editing-visible' : ''} ${validPreview ? 'has-valid-preview' : ''}`}>
     {locked && <div className="busy-banner" role="status"><span className="spinner"/><strong>{busyText}</strong></div>}
     <RecordingSurface>
-      <StepHeading number="1" title="Recording">Select a phrase in the waveform to make an edit.</StepHeading>
+      <StepHeading number="1" title="Recording"/>
       <div className="recording-meta"><h1>{session.name}</h1><span>{stamp(session.duration)}{editCount ? ` · ${editCount} edit${editCount > 1 ? 's' : ''}` : ''}</span></div>
       <p className="field-help" role="status">{session.voice_error ? 'Voice setup needs a clearer recording.' : session.voice_prepared ? 'Voice ready.' : 'Ready to edit.'}</p>
       {session.voice_error && <p className="warning">{session.voice_error} You can still play your recording.</p>}
@@ -67,17 +67,17 @@ export default function EditorWorkspace({ cleanup, previewCleanup, chooseCleanup
           <textarea id="replacement" rows="4" maxLength={1000} placeholder="e.g. The conference is on April fifth." value={text} disabled={locked} onChange={e => changeText(e.target.value)}/>
           {shortCorrection(text) && <p className="field-help" role="note"><span aria-hidden="true">ⓘ </span><strong>Tip:</strong> For seamless edits, include a few words before and after the word you want to change.</p>}
           <small className="character-count">{text.length}/1,000</small></>
-          : <><p role={transcription?.status === 'error' ? 'alert' : 'status'} className="field-help">{transcription?.message}</p>{transcription?.status === 'error' && <button className="secondary" disabled={locked} onClick={retryTranscription}>Retry speech detection</button>}<DeliveryControls detecting={transcription?.status === 'loading'} value={delivery} disabled={locked} onChange={changeDelivery}/></>}
+          : <><p role={transcription?.status === 'error' ? 'alert' : 'status'} className={`field-help ${transcription?.status === 'ready' ? 'transcription-ready' : ''}`}>{transcription?.message}</p>{transcription?.status === 'error' && <button className="secondary" disabled={locked} onClick={retryTranscription}>Retry speech detection</button>}<DeliveryControls transcriptionFailed={transcription?.status === 'error'} detecting={transcription?.status === 'loading'} value={delivery} disabled={locked} onChange={changeDelivery}/></>}
       </div>
       <details className="history-words"><summary>Original words for history <span>optional</span></summary>
       <label className="field-label" htmlFor="original-phrase">Original selected words (optional, for history)</label>
       <input id="original-phrase" type="text" maxLength={1000} value={originalText} disabled={locked} onChange={e => changeOriginalText(e.target.value)} placeholder="e.g. We’re launching next Monday"/></details>
       <div className="generation-action"><button className="primary" disabled={!!reason} aria-describedby="preview-help" onClick={generate}>{busy === 'generate' ? <><span className="spinner"/>{mode === 'delivery' ? 'Generating performance…' : 'Generating replacement…'}</> : 'Generate Preview'}</button>
-        <p className={reason ? 'action-help' : 'field-help'} id="preview-help" role="status">{reason || 'Ready to preview. Your recording stays unchanged until you insert the generated clip.'}</p>
+        <p className={reason ? 'action-help' : 'field-help'} id="preview-help" role="status">{reason || 'Preview first. Apply Edit saves the clip to Current.'}</p>
       </div>
     </EditingFields>
     <ComparisonExport hidden={!showEditing && !editCount && !reviewVisible}>
-      <StepHeading number="3" title="Preview and compare">Listen before you apply. Your original stays untouched.</StepHeading>
+      <StepHeading number="3" title="Preview and compare">Listen before applying. Original stays untouched.</StepHeading>
       <ReplacementPreview hidden={!reviewVisible}>
       <div className={`preview-box ${validPreview ? 'has-preview' : ''}`}><div className="preview-heading"><h3>Replacement preview</h3><button className="quiet" disabled={!!reason} onClick={generate}>Regenerate</button>{validPreview && <span className="pill">{Number.isFinite(preview.duration) ? `${preview.duration.toFixed(2)}s` : 'Ready'}{preview.mode === 'delivery' ? ' · Drama 3' : ''}</span>}</div>
         {validPreview ? <audio ref={previewPlayer} key={preview.preview_id} controls src={apiUrl(preview.preview_url)} aria-label="Generated replacement speech" onError={previewPlaybackFailed} onPlay={() => stopOtherAudio(previewPlayer.current)}/>
@@ -86,7 +86,7 @@ export default function EditorWorkspace({ cleanup, previewCleanup, chooseCleanup
           : <p className="field-help">Generate a preview above to listen here. Changing the selection, text or mode clears an outdated preview.</p>}
         {validPreview && (preview.continuity_warnings || []).map((message, i) => <p key={i} className="field-help" role="note">{message}</p>)}
         {validPreview && Math.abs(preview.duration_change || 0) >= .1 && <p className="field-help">This preview changes the selected duration by {preview.duration_change > 0 ? '+' : ''}{preview.duration_change.toFixed(2)}s. Listen for pacing before applying.</p>}
-        <div className="insert-row"><p className="field-help" id="apply-help">{busy === 'replace' ? 'Applying the saved clip. No speech is being regenerated.' : validPreview ? `Listen first, then apply this exact clip to ${stamp(region.start)}–${stamp(region.end)}. Previewing alone does not change Current.` : 'Apply Edit becomes available after a successful preview.'}</p>
+        <div className="insert-row"><p className="field-help" id="apply-help">{busy === 'replace' ? 'Applying the saved clip. No speech is being regenerated.' : validPreview ? `Listen first, then apply this exact clip to ${stamp(region.start)}–${stamp(region.end)}.` : 'Apply Edit becomes available after a successful preview.'}</p>
           <button className="primary" disabled={locked || !validPreview} aria-describedby="apply-help" onClick={replace}><Icon name="check"/>{busy === 'replace' ? 'Applying replacement…' : 'Apply Edit'}</button></div>
       </div>
       <p className="privacy-note">Authorized voice samples and text are sent to Fish Audio when needed. Change Delivery also sends the selected segment for speech detection. Requests may consume API credits.</p>
@@ -97,7 +97,7 @@ export default function EditorWorkspace({ cleanup, previewCleanup, chooseCleanup
       </div><div className="comparison-label" aria-live="polite"><span className={comparisonPlaying ? 'playing-dot playing' : 'playing-dot'}/>{comparisonPlaying ? 'Playing' : 'Ready to play'}: <strong>{version === 'original' ? 'Original recording' : 'Current recording'}</strong><span>{stamp(version === 'original' ? session.original_duration : session.duration)}</span></div>
         <audio ref={comparison} key={`${version}-${session.revision}`} controls preload="metadata" aria-label={version === 'original' ? 'Original recording comparison' : 'Current recording comparison'} src={apiUrl(`/api/audio/${session.session_id}?version=${version}&revision=${session.revision}`)}
           onPlay={() => { setComparisonPlaying(true); stopOtherAudio(comparison.current) }} onPause={() => setComparisonPlaying(false)} onEnded={() => setComparisonPlaying(false)}/>
-        <p className="field-help">Comparison changes only this player. Your waveform selection and draft text stay in place.</p></div>
+        <p className="field-help">Comparison leaves your selection and draft unchanged.</p></div>
         <div className="export-action"><span className="eyebrow">Export</span><h3>Save your recording</h3><p className="field-help">MP3 · 192 kbps · {stamp(session.duration)}</p>
           <button className="primary" disabled={locked || !editCount} aria-describedby="export-help" onClick={download}><Icon name="download"/>{busy === 'export' ? 'Preparing MP3…' : 'Download MP3'}</button>
           <p className="field-help" id="export-help">{locked ? 'Wait for the current request to finish before exporting.' : editCount ? 'Downloads all currently applied edits. Your original stays untouched.' : 'Apply an edit to enable download.'}</p>

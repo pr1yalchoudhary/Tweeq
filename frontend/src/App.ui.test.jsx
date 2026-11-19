@@ -480,12 +480,25 @@ describe('Sequential editor workflow with local mocks', () => {
     expect(request.mock.calls.map(([path]) => path)).toEqual([`/api/undo/${uploaded.session_id}`, `/api/redo/${uploaded.session_id}`])
   })
 
-  it('opens on a compact upload card without a hero or editor navigation strip', async () => {
+  it('opens on the reference-style upload shell without unsupported navigation', async () => {
     expect(document.querySelector('h1').textContent).toBe('Upload your recording')
-    expect(document.querySelector('.header-inner .brand-block p').textContent).toBe("One mistake shouldn't mean another take.")
+    expect(document.querySelector('.sidebar-brand p').textContent).toBe("One mistake shouldn't mean another take.")
     expect(document.querySelector('.button.primary').textContent).toBe('Choose File')
     expect(document.querySelector('.workflow-nav')).toBeNull()
     expect(document.querySelector('.features')).toBeNull()
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it('collapses navigation without reloading the waveform or discarding an editing draft', async () => {
+    await readyToGenerate()
+    const waveform = mock.waves[0]
+    await act(async () => document.querySelector('[aria-label="Toggle navigation"]').click())
+    expect(document.querySelector('.app-sidebar').hasAttribute('inert')).toBe(true)
+    expect(field('replacement').value).toBe('April fifth.')
+    expect(mock.waves).toHaveLength(1)
+    expect(mock.waves[0]).toBe(waveform)
+    await act(async () => document.querySelector('[aria-label="Toggle navigation"]').click())
+    expect(field('replacement').value).toBe('April fifth.')
     expect(request).not.toHaveBeenCalled()
   })
 

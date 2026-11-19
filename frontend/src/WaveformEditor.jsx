@@ -29,7 +29,7 @@ export default function WaveformEditor({ url, duration, region, onRegion, disabl
     if (validSelection(region, duration) && ready) {
       syncing.current = true
       if (r && !sameSelection(r, region)) r.setOptions(region)
-      else if (!r) regions.current?.addRegion({ ...region, color: 'rgba(176,128,255,.28)', minLength: .001, drag: true, resize: true })
+      else if (!r) regions.current?.addRegion({ ...region, color: 'rgba(232,172,112,.20)', minLength: .001, drag: true, resize: true })
       syncing.current = false
     } else if (!Number.isFinite(region.start) && !Number.isFinite(region.end)) {
       regions.current?.getRegions().forEach(item => item.remove())
@@ -40,9 +40,9 @@ export default function WaveformEditor({ url, duration, region, onRegion, disabl
     const plugin = RegionsPlugin.create()
     regions.current = plugin
     const timeline = TimelinePlugin.create({ height: 28, insertPosition: 'beforebegin', secondaryLabelOpacity: .65,
-      style: { fontSize: '11px', color: '#c1b3d6' } })
-    const ws = WaveSurfer.create({ container: container.current, url, height: 190, waveColor: '#77699a',
-      progressColor: '#c5a7ff', cursorColor: '#f7f1ff', cursorWidth: 2, barWidth: 3, barGap: 2,
+      style: { fontSize: '11px', color: '#807672' } })
+    const ws = WaveSurfer.create({ container: container.current, url, height: 156, waveColor: '#b6aeaa',
+      progressColor: '#625954', cursorColor: '#1d1d1c', cursorWidth: 2, barWidth: 3, barGap: 2,
       barRadius: 3, normalize: true, autoScroll: true, hideScrollbar: false, plugins: [plugin, timeline] })
     wave.current = ws
     let initial = true
@@ -55,10 +55,10 @@ export default function WaveformEditor({ url, duration, region, onRegion, disabl
       if (wave.current !== ws) return
       setReady(true)
       const current = selection.current
-      if (validSelection(current, ws.getDuration())) plugin.addRegion({ ...current, color: 'rgba(176,128,255,.28)', minLength: .001, drag: true, resize: true })
+      if (validSelection(current, ws.getDuration())) plugin.addRegion({ ...current, color: 'rgba(232,172,112,.20)', minLength: .001, drag: true, resize: true })
       initial = false
     })
-    const stopDrag = plugin.enableDragSelection({ color: 'rgba(176,128,255,.28)', minLength: .001 })
+    const stopDrag = plugin.enableDragSelection({ color: 'rgba(232,172,112,.20)', minLength: .001 })
     ws.on('play', () => { setPlaying(true); playCallback.current?.() }); ws.on('pause', () => setPlaying(false))
     ws.on('finish', () => setPlaying(false)); ws.on('timeupdate', setTime)
     ws.on('resize', () => { if (zoomRef.current > 1) ws.zoom(ws.getWidth() / ws.getDuration() * zoomRef.current) })
@@ -114,9 +114,9 @@ export default function WaveformEditor({ url, duration, region, onRegion, disabl
         onChange={e => updateInput(key, e.target.value)}/><small>seconds</small></div>
     </label>)}<div className="selection-summary"><span>Selection duration</span><output>{valid ? `${(region.end - region.start).toFixed(3)}s` : emptySelection ? 'No selection' : 'Invalid selection'}</output></div></div>
     <p className={valid ? 'field-help' : 'field-help invalid'} id="selection-help">{valid
-      ? `Selected ${stamp(region.start)}–${stamp(region.end)}. Adjust the edges or enter exact times.`
+      ? `Selected ${stamp(region.start)}–${stamp(region.end)}.`
       : emptySelection ? 'Select your next segment by dragging on the updated waveform, or enter Start and End. These timestamps belong to the current edited recording.'
       : 'Enter Start and End within the recording. End must follow Start by at least 0.001 seconds. Your edit text is preserved.'}</p>
-    <p className="field-help zoom-hint">{zoom === 1 ? 'Zoom in for a more precise selection.' : 'Scroll to move through the zoomed recording.'}</p>
+    <details className="waveform-help"><summary>Selection & zoom help</summary><p className="field-help zoom-hint">{zoom === 1 ? 'Zoom in for a more precise selection.' : 'Scroll to move through the zoomed recording.'}</p><p className="field-help">Drag to select; adjust the edges or enter exact Start and End times.</p></details>
   </div>
 }

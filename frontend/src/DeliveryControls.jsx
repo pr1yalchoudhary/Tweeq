@@ -3,8 +3,8 @@ import { editScript, PRESETS } from './deliveryText'
 
 export const EMPTY_DELIVERY = { direction: '', segment_text: '', language: 'original', translated_text: '' }
 
-export default function DeliveryControls({ value, onChange, disabled, detecting }) {
-  const segment = useRef(null), translated = useRef(null)
+export default function DeliveryControls({ value, onChange, disabled, detecting, transcriptionFailed }) {
+  const segment = useRef(null), translated = useRef(null), transcriptDisclosure = useRef(null)
   const [hint, setHint] = useState('')
   const translating = value.language !== 'original'
   const target = translating ? translated : segment
@@ -19,13 +19,17 @@ export default function DeliveryControls({ value, onChange, disabled, detecting 
     const result = editScript(value[field], input.selectionStart, input.selectionEnd, kind)
     if (result.error) { setHint(result.error); return }
     update(field, result.value)
+    if (!translating && transcriptDisclosure.current) transcriptDisclosure.current.open = true
     requestAnimationFrame(() => { input.focus(); input.setSelectionRange(result.cursor, result.cursor) })
   }
   const tones = ['Natural', 'Excited', 'Calm', 'Confident', 'Sad', 'Nervous', 'Whisper'].map(label => PRESETS.find(item => item[0] === label))
   tones.push(['Dramatic', 'dramatic but restrained, with natural pacing and subtle emphasis'])
   return <div className="delivery-controls">
+    <details className="detected-words" ref={transcriptDisclosure} open={transcriptionFailed || undefined}>
+    <summary><span>Detected words</span><span className="transcript-excerpt">{detecting ? 'Detecting…' : value.segment_text || 'Review or enter words'}</span></summary>
     <label className="field-label" htmlFor="segment-text">Your words</label>
     <textarea ref={segment} id="segment-text" rows="3" maxLength={1000} value={value.segment_text} disabled={disabled || detecting} placeholder="Detected speech appears here. You can correct it if needed." onChange={e => update('segment_text', e.target.value)}/>
+    <small className="character-count">{value.segment_text.length}/1,000</small></details>
     <fieldset disabled={disabled} className="preset-group"><legend className="field-label">How should it sound?</legend><div className="presets">
       {tones.map(([label, direction]) => <button key={label} type="button" aria-pressed={value.direction === direction} className={value.direction === direction ? 'chosen' : ''} onClick={() => update('direction', direction)}>{label}</button>)}
     </div></fieldset>
@@ -50,6 +54,6 @@ export default function DeliveryControls({ value, onChange, disabled, detecting 
       <p className="field-help">Natural leaves the direction empty. Stronger directions may change pitch and pacing.</p>
     </details>
     {hint && <p className="toolbar-hint" role="status">{hint}</p>}
-    <small className="character-count">{value[field].length}/1,000</small>
+    {translating && <small className="character-count">{value[field].length}/1,000</small>}
   </div>
 }
